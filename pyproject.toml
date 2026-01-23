@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pykeydb"
+version = "0.1.0"
+description = "Thread-safe in-memory key-value store with WAL"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Ankit Josh", email = "ankitjosh78@gmail.com"}
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pykeydb*"]
