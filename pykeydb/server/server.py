@@ -1,5 +1,6 @@
 import asyncio
 from pykeydb.db.pyKeyDB import get_pykey_db
+from pykeydb.server.clientContext import ClientContext
 
 HOST = "127.0.0.1"
 PORT = 6379
@@ -11,7 +12,9 @@ db = get_pykey_db()
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
 
     addr = writer.get_extra_info("peername")
+    client_context = ClientContext(db)
     print(f"Client connected: {addr}")
+    print(f"Client context initialized for {addr}")
 
     try:
         while True:
@@ -23,7 +26,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             if not command:
                 continue
 
-            response = execute_command(command)
+            response = client_context.execute_command(command)
             writer.write((response + "\n").encode())
             await writer.drain()
 
@@ -34,32 +37,6 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         writer.close()
         await writer.wait_closed()
         print(f"Client disconnected: {addr}")
-
-
-def execute_command(cmd: list[str]) -> str:
-    try:
-        op = cmd[0].upper()
-
-        if op == "SET" and len(cmd) >= 3:
-            key = cmd[1]
-            value = " ".join(cmd[2:])
-            return "OK" if db.set(key, value) else "ERR"
-
-        if op == "GET" and len(cmd) == 2:
-            val = db.get(cmd[1])
-            return str(val) if val is not None else "NULL"
-
-        if op == "DEL" and len(cmd) == 2:
-            return "OK" if db.delete(cmd[1]) else "NULL"
-
-        if op == "TYPE" and len(cmd) == 2:
-            t = db.type(cmd[1])
-            return t if t else "NULL"
-
-        return "ERR unknown command"
-
-    except Exception as e:
-        return f"ERR {e}"
 
 
 async def main():

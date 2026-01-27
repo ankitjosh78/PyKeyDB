@@ -94,7 +94,7 @@ class PyKeyDB(KeyValueDBInterface):
         with self._db_lock:
             entry = self._db.get(key, None)
             if entry:
-                return entry.data_type
+                return str(type(entry).__name__)
             logger.warning(f"TYPE operation failed. The key: {key} doesn't exist.")
             return None
 

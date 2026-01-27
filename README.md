@@ -4,27 +4,62 @@ Thread-safe in-memory key-value database with write-ahead logging and async netw
 
 ## Architecture
 
+### Layered Design
+
+The system follows a clean 3-layer architecture:
+
+**Protocol Layer** (`server.py`)
+- Async networking with `asyncio`
+- Connection lifecycle management
+- Delegates commands to session layer
+- No business logic or transaction handling
+
+**Session Layer** (`clientContext.py`)
+- Per-client state management
+- Transaction state machine (MULTI/EXEC/DISCARD)
+- Command queueing during transactions
+- Routes commands to execution engine
+
+**Execution Engine** (`utils.apply_command` + `PyKeyDB`)
+- Pure command → DB mutation
+- Thread-safe operations via `RLock`
+- WAL integration for durability
+- No client state or networking concerns
+
 ### Core Components
 
 **PyKeyDB** - Singleton-based in-memory store using `threading.RLock` for concurrent access. Operations are atomically logged to WAL before modifying in-memory state.
 
 **WriteAheadLog** - Append-only log with JSON-serialized operations. Supports optional fsync for durability guarantees. Replays log on startup to reconstruct state.
 
-**Async Server** - `asyncio`-based TCP server handling concurrent client connections. Text-based protocol similar to Redis RESP.
+**ClientContext** - Per-connection session state. Maintains transaction queue and FSM for MULTI/EXEC/DISCARD semantics.
 
-### Thread Safety
+### Thread Safety & Atomicity
 
+**Concurrency model:**
 - Double-checked locking for singleton initialization
 - Reentrant locks (`RLock`) to allow nested acquisitions
 - WAL writes are serialized per operation
 - All mutations are guarded by locks
 
+**Transaction atomicity:**
+- `EXEC` runs synchronously (no `await` calls)
+- Single event loop tick = no interleaving between queued commands
+- Per-client transaction queue prevents cross-client interference
+- Atomicity guaranteed by asyncio's cooperative scheduling
+
 ### Data Flow
 
+**Normal operation:**
 ```
-Client Command → Server Parser → DB Operation → WAL Log → In-Memory Update → Response
-                                        ↓
-                                   fsync (optional)
+Client → Server → ClientContext → apply_command → PyKeyDB → WAL → Response
+                                                      ↓
+                                                 fsync (optional)
+```
+
+**Transaction mode:**
+```
+MULTI → [queue commands] → EXEC → batch apply_command (atomic) → Response
 ```
 
 On restart, WAL is replayed to restore the last consistent state.
@@ -65,13 +100,20 @@ Default: `127.0.0.1:6379`
 
 ### Commands
 
+**Basic operations:**
 - `SET key value` - Write key-value pair
 - `GET key` - Read value by key
 - `DEL key` - Remove key
 - `TYPE key` - Get value type
 
-### Example
+**Transactions:**
+- `MULTI` - Begin transaction block
+- `EXEC` - Execute all queued commands atomically
+- `DISCARD` - Abort transaction and clear queue
 
+### Examples
+
+**Basic usage:**
 ```bash
 nc 127.0.0.1 6379
 
@@ -82,6 +124,22 @@ GET mykey
 > hello
 
 DEL mykey
+> OK
+```
+
+**Transactions:**
+```bash
+MULTI
+> OK
+
+SET x 10
+> QUEUED
+
+SET y 20
+> QUEUED
+
+EXEC
+> OK
 > OK
 ```
 
@@ -104,9 +162,11 @@ pykeydb/
   ├── db/
   │   ├── pyKeyDB.py              # Core KV store with singleton pattern
   │   ├── writeAheadLog.py        # WAL implementation
-  │   └── keyValueDBInterface.py  # Abstract interface
+  │   ├── keyValueDBInterface.py  # Abstract interface
+  │   └── utils.py                # Command execution engine
   ├── benchmark/                  
-  │   └── benchmark.py            # Benchmarking suite
+  │   └── benchmark.py            # Performance tests
   └── server/
-      └── server.py               # Async TCP server
+      ├── server.py               # Protocol layer (networking)
+      └── clientContext.py        # Session layer (transactions)
 ```
