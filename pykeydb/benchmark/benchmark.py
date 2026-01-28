@@ -2,10 +2,11 @@ import time
 import threading
 import random
 import string
+import os
 from statistics import mean
 
-from pykeydb.db.pyKeyDB import PyKeyDB
-from pykeydb.db.writeAheadLog import WriteAheadLog
+from pykeydb.db.pyKeyDB import get_pykey_db, dispose_pykey_db
+from pykeydb.db.writeAheadLog import get_write_ahead_log, dispose_write_ahead_log
 
 # Config
 NUM_THREADS = 4
@@ -16,12 +17,19 @@ def random_key():
     return "".join(random.choices(string.ascii_lowercase, k=16))
 
 
-def setup_db():
-    WriteAheadLog.dispose()
-    PyKeyDB.dispose()
+def setup_db(wal_path="benchmark.wal", use_fsync=True):
+    """Setup a fresh DB instance for benchmarking"""
+    # Clean up old instances (this also removes from factory caches)
+    dispose_pykey_db(wal_path)
+    dispose_write_ahead_log(wal_path)
 
-    wal = WriteAheadLog("benchmark.wal", use_fsync=True)
-    db = PyKeyDB(wal)
+    # Remove old WAL file
+    if os.path.exists(wal_path):
+        os.remove(wal_path)
+
+    # Create new instances
+    wal = get_write_ahead_log(wal_path, use_fsync=use_fsync)
+    db = get_pykey_db(wal, wal_path)
     return db
 
 
@@ -38,6 +46,38 @@ def benchmark_get(db, keys, latencies):
         key = random.choice(keys)
         start = time.perf_counter()
         db.get(key)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_lpush(db, thread_id, latencies):
+    for i in range(OPS_PER_THREAD):
+        key = f"list-{thread_id}"
+        start = time.perf_counter()
+        db.lpush(key, str(i))
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_rpush(db, thread_id, latencies):
+    for i in range(OPS_PER_THREAD):
+        key = f"list-{thread_id}"
+        start = time.perf_counter()
+        db.rpush(key, str(i))
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_lpop(db, list_keys, latencies):
+    for _ in range(OPS_PER_THREAD):
+        key = random.choice(list_keys)
+        start = time.perf_counter()
+        db.lpop(key)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_lrange(db, list_keys, latencies):
+    for _ in range(OPS_PER_THREAD):
+        key = random.choice(list_keys)
+        start = time.perf_counter()
+        db.lrange(key, 0, 99)  # Get first 100 elements
         latencies.append(time.perf_counter() - start)
 
 
@@ -74,14 +114,50 @@ def run_benchmark(name, target, *args):
 
 
 if __name__ == "__main__":
-    db = setup_db()
+    print("=" * 60)
+    print("PyKeyDB Benchmark Suite")
+    print("=" * 60)
+    print(f"Threads: {NUM_THREADS}")
+    print(f"Operations per thread: {OPS_PER_THREAD:,}")
+    print(f"Total operations per benchmark: {NUM_THREADS * OPS_PER_THREAD:,}")
+    print("=" * 60)
 
+    # String operations
+    db = setup_db()
     run_benchmark("SET benchmark", benchmark_set, db)
 
     keys = list(db._db.keys())
 
-    # GET benchmark (reuse threads but different target)
     def get_wrapper(db, thread_id, latencies):
         benchmark_get(db, keys, latencies)
 
     run_benchmark("GET benchmark", get_wrapper, db)
+
+    # List operations
+    print("\n" + "=" * 60)
+    print("List Operations")
+    print("=" * 60)
+
+    db = setup_db()
+    run_benchmark("LPUSH benchmark", benchmark_lpush, db)
+
+    list_keys = [k for k in db._db.keys() if k.startswith("list-")]
+
+    def lrange_wrapper(db, thread_id, latencies):
+        benchmark_lrange(db, list_keys, latencies)
+
+    run_benchmark("LRANGE benchmark", lrange_wrapper, db)
+
+    db = setup_db()
+    run_benchmark("RPUSH benchmark", benchmark_rpush, db)
+
+    list_keys = [k for k in db._db.keys() if k.startswith("list-")]
+
+    def lpop_wrapper(db, thread_id, latencies):
+        benchmark_lpop(db, list_keys, latencies)
+
+    run_benchmark("LPOP benchmark", lpop_wrapper, db)
+
+    print("\n" + "=" * 60)
+    print("Benchmark Complete!")
+    print("=" * 60)

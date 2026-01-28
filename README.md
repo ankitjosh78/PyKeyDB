@@ -66,23 +66,49 @@ On restart, WAL is replayed to restore the last consistent state.
 
 ## Performance
 
-Benchmarks run on 40,000 operations (measured with `python -m pykeydb.benchmark.benchmark`):
+Benchmarks run on 40,000 operations with 4 threads (measured with `python -m pykeydb.benchmark.benchmark`):
 
-### Without fsync (buffered writes)
+### String Operations
 
-| Operation | Throughput | Avg Latency | P95 Latency |
-|-----------|------------|-------------|-------------|
-| SET       | 108,432 ops/sec | 36.55 µs | 19.67 µs |
-| GET       | 3,233,641 ops/sec | 0.15 µs | 0.25 µs |
-
-### With fsync (durable writes)
+#### Without fsync (buffered writes)
 
 | Operation | Throughput | Avg Latency | P95 Latency |
 |-----------|------------|-------------|-------------|
-| SET       | 40,096 ops/sec | 98.93 µs | 1041.75 µs |
-| GET       | 2,874,596 ops/sec | 0.17 µs | 0.29 µs |
+| SET       | 84,315 ops/sec | 47.04 µs | 21.17 µs |
+| GET       | 2,658,345 ops/sec | 0.21 µs | 0.33 µs |
 
-**Trade-off:** Enabling fsync reduces SET throughput by ~60% but guarantees durability against crashes. GET operations are unaffected as they only read from memory.
+#### With fsync (durable writes)
+
+| Operation | Throughput | Avg Latency | P95 Latency |
+|-----------|------------|-------------|-------------|
+| SET       | 34,319 ops/sec | 115.99 µs | 1066.67 µs |
+| GET       | 2,591,604 ops/sec | 0.22 µs | 0.38 µs |
+
+### List Operations
+
+#### Without fsync (buffered writes)
+
+| Operation | Throughput | Avg Latency | P95 Latency |
+|-----------|------------|-------------|-------------|
+| LPUSH     | 6,530 ops/sec | 611.14 µs | 1945.75 µs |
+| RPUSH     | 6,500 ops/sec | 612.85 µs | 1908.71 µs |
+| LPOP      | 6,886 ops/sec | 579.02 µs | 1882.63 µs |
+| LRANGE    | 2,273,077 ops/sec | 0.28 µs | 0.33 µs |
+
+#### With fsync (durable writes)
+
+| Operation | Throughput | Avg Latency | P95 Latency |
+|-----------|------------|-------------|-------------|
+| LPUSH     | 5,389 ops/sec | 741.30 µs | 2007.79 µs |
+| RPUSH     | 5,526 ops/sec | 722.72 µs | 2003.37 µs |
+| LPOP      | 5,856 ops/sec | 682.63 µs | 1979.71 µs |
+| LRANGE    | 2,270,244 ops/sec | 0.28 µs | 0.33 µs |
+
+**Key Insights:**
+- **fsync impact:** Reduces write throughput by ~60% for strings, ~15% for lists
+- **Read performance:** GET and LRANGE are memory-only operations, unaffected by fsync
+- **List operations:** Slower than strings due to serialization overhead and larger WAL entries
+- **Thread safety:** All operations are thread-safe with proper locking
 
 ## Installation
 
@@ -100,11 +126,19 @@ Default: `127.0.0.1:6379`
 
 ### Commands
 
-**Basic operations:**
-- `SET key value` - Write key-value pair
-- `GET key` - Read value by key
-- `DEL key` - Remove key
-- `TYPE key` - Get value type
+**String operations:**
+- `SET key value` - Store string value
+- `GET key` - Retrieve string value
+- `DEL key` - Delete key (any type)
+- `TYPE key` - Get data type of key
+
+**List operations:**
+- `LPUSH key value [value ...]` - Prepend values to list
+- `RPUSH key value [value ...]` - Append values to list
+- `LPOP key` - Remove and return first element
+- `RPOP key` - Remove and return last element
+- `LRANGE key start stop` - Get list slice (use -1 for end)
+- `LLEN key` - Get list length
 
 **Transactions:**
 - `MULTI` - Begin transaction block
@@ -113,7 +147,7 @@ Default: `127.0.0.1:6379`
 
 ### Examples
 
-**Basic usage:**
+**String operations:**
 ```bash
 nc 127.0.0.1 6379
 
@@ -123,8 +157,43 @@ SET mykey hello
 GET mykey
 > hello
 
+TYPE mykey
+> string
+
 DEL mykey
 > OK
+```
+
+**List operations:**
+```bash
+LPUSH mylist a b c
+> (integer) 3
+
+LRANGE mylist 0 -1
+> 1) c
+> 2) b
+> 3) a
+
+RPUSH mylist d e
+> (integer) 5
+
+LPOP mylist
+> c
+
+LLEN mylist
+> (integer) 4
+
+TYPE mylist
+> list
+```
+
+**Type safety:**
+```bash
+SET mykey hello
+> OK
+
+LPUSH mykey value
+> ERR WRONGTYPE: key is string, not list
 ```
 
 **Transactions:**
@@ -145,28 +214,36 @@ EXEC
 
 ## Roadmap
 
+- [x] Write-ahead logging (WAL)
+- [x] Thread-safe operations
+- [x] Transaction support (MULTI/EXEC/DISCARD)
+- [x] List data type (LPUSH, RPUSH, LPOP, RPOP, LRANGE, LLEN)
+- [x] Type system with WRONGTYPE errors
+- [x] Benchmarking suite
+- [ ] Hash data type (HSET, HGET, HGETALL, HDEL)
+- [ ] Set data type (SADD, SREM, SMEMBERS, SISMEMBER)
+- [ ] Numeric operations (INCR, DECR, INCRBY)
 - [ ] RESP protocol implementation
-- [ ] Data type support (lists, sets, hashes)
 - [ ] TTL/expiration on keys
 - [ ] Snapshot-based persistence
 - [ ] WAL compaction/rotation
 - [ ] Connection pooling
 - [ ] Pub/sub messaging
 - [ ] Replication support
-- [ ] Benchmarking suite
 
 ## Project Structure
 
 ```
 pykeydb/
   ├── db/
-  │   ├── pyKeyDB.py              # Core KV store with singleton pattern
-  │   ├── writeAheadLog.py        # WAL implementation
+  │   ├── pyKeyDB.py              # Core KV store with per-path singletons
+  │   ├── writeAheadLog.py        # WAL with per-path singletons
+  │   ├── dataTypes.py            # TypedValue wrapper and DataType enum
   │   ├── keyValueDBInterface.py  # Abstract interface
   │   └── utils.py                # Command execution engine
   ├── benchmark/                  
-  │   └── benchmark.py            # Performance tests
+  │   └── benchmark.py            # Performance tests (strings + lists)
   └── server/
-      ├── server.py               # Protocol layer (networking)
+      ├── server.py               # Protocol layer (async networking)
       └── clientContext.py        # Session layer (transactions)
 ```
