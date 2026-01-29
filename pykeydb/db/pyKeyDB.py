@@ -9,7 +9,7 @@ logger = getLogger(__name__)
 
 
 class PyKeyDB(KeyValueDBInterface):
-    _instances: Dict[str, 'PyKeyDB'] = {}
+    _instances: Dict[str, "PyKeyDB"] = {}
     _lock = threading.RLock()
 
     def __new__(cls, write_ahead_log: WriteAheadLog):
@@ -50,8 +50,8 @@ class PyKeyDB(KeyValueDBInterface):
                             if key in self._db:
                                 del self._db[key]
 
-                        elif op in ["LPUSH", "RPUSH", "LPOP", "RPOP"]:
-                            # List operations store full state
+                        elif op in ["LPUSH", "RPUSH", "LPOP", "RPOP", "HSET", "HDEL"]:
+                            # List and hash operations store full state
                             value = record["value"]
                             if isinstance(value, dict) and "type" in value:
                                 self._db[key] = TypedValue.from_dict(value)
@@ -248,18 +248,158 @@ class PyKeyDB(KeyValueDBInterface):
             # Return length of the list
             return len(typed_val.value)
 
+    def hset(self, key: str, fields: dict) -> int:
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            # If key doesn't exist, create new hash
+            if typed_val is None:
+                typed_val = TypedValue(fields.copy(), DataType.HASH)
+                fields_set = len(fields)
+            # If value data type is not hash
+            elif typed_val.data_type != DataType.HASH:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not hash"
+                )
+            else:
+                # Count only new fields being set
+                fields_set = sum(1 for f in fields if f not in typed_val.value)
+                typed_val.value.update(fields)
+
+            self.wal.log_operation("HSET", key, typed_val.to_dict())
+            self._db[key] = typed_val
+            return fields_set
+
+    def hget(self, key, field):
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            # If key doesn't exist, return empty dict {}
+            if typed_val is None:
+                return None
+            # If value data type is not hash
+            elif typed_val.data_type != DataType.HASH:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not hash"
+                )
+            else:
+                if field not in typed_val.value:
+                    return None
+                return typed_val.value[field]
+
+    def hmget(self, key, *fields):
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            values = []
+            # If key doesn't exist, return None for each field
+            if typed_val is None:
+                for field in fields:
+                    values.append(None)
+            # If value data type is not hash
+            elif typed_val.data_type != DataType.HASH:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not hash"
+                )
+            else:
+                for field in fields:
+                    values.append(typed_val.value.get(field))
+
+            return values
+
+    def hgetall(self, key):
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            # If key doesn't exist, return empty dict {}
+            if typed_val is None:
+                return {}
+            # If value data type is not hash
+            elif typed_val.data_type != DataType.HASH:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not hash"
+                )
+            else:
+                return typed_val.value
+
+    def hdel(self, key: str, *fields: str) -> int:
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            # If key doesn't exist, return 0
+            if typed_val is None:
+                return 0
+            # If value data type is not hash
+            elif typed_val.data_type != DataType.HASH:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not hash"
+                )
+
+            # Delete fields and count deletions
+            del_count = 0
+            for field in fields:
+                if field in typed_val.value:
+                    del typed_val.value[field]
+                    del_count += 1
+
+            # Log final state if any fields were deleted
+            if del_count > 0:
+                # If hash is now empty, we can delete the key
+                if not typed_val.value:
+                    self.wal.log_operation("DEL", key)
+                    del self._db[key]
+                else:
+                    # Log updated hash state
+                    self.wal.log_operation("HDEL", key, typed_val.to_dict())
+
+            return del_count
+
+    def hlen(self, key: str) -> int:
+        """HLEN key - get number of fields in hash"""
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            # If key doesn't exist, return 0
+            if typed_val is None:
+                return 0
+            # If value data type is not hash
+            elif typed_val.data_type != DataType.HASH:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not hash"
+                )
+
+            return len(typed_val.value)
+
+    def hexists(self, key: str, field: str) -> bool:
+        """HEXISTS key field - check if hash field exists"""
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            if typed_val is None:
+                return False
+            # If value data type is not hash
+            elif typed_val.data_type != DataType.HASH:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not hash"
+                )
+
+            return field in typed_val.value
+
 
 _pykey_dbs: Dict[str, PyKeyDB] = {}
 _db_factory_lock = threading.RLock()
 
 
-def get_pykey_db(write_ahead_log: Optional[WriteAheadLog] = None, wal_path: str = "wal.log") -> PyKeyDB:
+def get_pykey_db(
+    write_ahead_log: Optional[WriteAheadLog] = None, wal_path: str = "wal.log"
+) -> PyKeyDB:
     """Get or create PyKeyDB instance for the given WAL (singleton per WAL path)"""
     with _db_factory_lock:
         if write_ahead_log is None:
             from pykeydb.db.writeAheadLog import get_write_ahead_log
+
             write_ahead_log = get_write_ahead_log(wal_path)
-        
+
         path = write_ahead_log.path
         if path not in _pykey_dbs:
             _pykey_dbs[path] = PyKeyDB(write_ahead_log)

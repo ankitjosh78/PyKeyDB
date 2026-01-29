@@ -81,6 +81,52 @@ def benchmark_lrange(db, list_keys, latencies):
         latencies.append(time.perf_counter() - start)
 
 
+def benchmark_hset(db, thread_id, latencies):
+    for i in range(OPS_PER_THREAD):
+        key = f"hash-{thread_id}"
+        fields = {f"field{i}": f"value{i}"}
+        start = time.perf_counter()
+        db.hset(key, fields)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_hget(db, hash_keys, latencies):
+    for i in range(OPS_PER_THREAD):
+        key = random.choice(hash_keys)
+        field = f"field{random.randint(0, OPS_PER_THREAD - 1)}"
+        start = time.perf_counter()
+        db.hget(key, field)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_hmget(db, hash_keys, latencies):
+    for i in range(OPS_PER_THREAD):
+        key = random.choice(hash_keys)
+        fields = [
+            f"field{j}" for j in range(random.randint(0, 9), random.randint(10, 20))
+        ]
+        start = time.perf_counter()
+        db.hmget(key, *fields)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_hgetall(db, hash_keys, latencies):
+    for _ in range(OPS_PER_THREAD):
+        key = random.choice(hash_keys)
+        start = time.perf_counter()
+        db.hgetall(key)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_hdel(db, hash_keys, latencies):
+    for i in range(OPS_PER_THREAD):
+        key = random.choice(hash_keys)
+        field = f"field{random.randint(0, OPS_PER_THREAD - 1)}"
+        start = time.perf_counter()
+        db.hdel(key, field)
+        latencies.append(time.perf_counter() - start)
+
+
 # Runner
 def run_benchmark(name, target, *args):
     print(f"\n=== {name} ===")
@@ -157,6 +203,36 @@ if __name__ == "__main__":
         benchmark_lpop(db, list_keys, latencies)
 
     run_benchmark("LPOP benchmark", lpop_wrapper, db)
+
+    # Hash operations
+    print("\n" + "=" * 60)
+    print("Hash Operations")
+    print("=" * 60)
+
+    db = setup_db()
+    run_benchmark("HSET benchmark", benchmark_hset, db)
+
+    hash_keys = [k for k in db._db.keys() if k.startswith("hash-")]
+
+    def hget_wrapper(db, thread_id, latencies):
+        benchmark_hget(db, hash_keys, latencies)
+
+    run_benchmark("HGET benchmark", hget_wrapper, db)
+
+    def hmget_wrapper(db, thread_id, latencies):
+        benchmark_hmget(db, hash_keys, latencies)
+
+    run_benchmark("HMGET benchmark", hmget_wrapper, db)
+
+    def hgetall_wrapper(db, thread_id, latencies):
+        benchmark_hgetall(db, hash_keys, latencies)
+
+    run_benchmark("HGETALL benchmark", hgetall_wrapper, db)
+
+    def hdel_wrapper(db, thread_id, latencies):
+        benchmark_hdel(db, hash_keys, latencies)
+
+    run_benchmark("HDEL benchmark", hdel_wrapper, db)
 
     print("\n" + "=" * 60)
     print("Benchmark Complete!")

@@ -104,10 +104,34 @@ Benchmarks run on 40,000 operations with 4 threads (measured with `python -m pyk
 | LPOP      | 5,856 ops/sec | 682.63 µs | 1979.71 µs |
 | LRANGE    | 2,270,244 ops/sec | 0.28 µs | 0.33 µs |
 
+### Hash Operations
+
+#### Without fsync (buffered writes)
+
+| Operation | Throughput | Avg Latency | P95 Latency |
+|-----------|------------|-------------|-------------|
+| HSET      | 2,915 ops/sec | 1369.87 µs | 2557.83 µs |
+| HGET      | 1,561,346 ops/sec | 0.28 µs | 0.46 µs |
+| HMGET     | 592,717 ops/sec | 1.89 µs | 0.87 µs |
+| HGETALL   | 3,303,499 ops/sec | 0.14 µs | 0.17 µs |
+| HDEL      | 3,282 ops/sec | 1216.95 µs | 2614.25 µs |
+
+#### With fsync (durable writes)
+
+| Operation | Throughput | Avg Latency | P95 Latency |
+|-----------|------------|-------------|-------------|
+| HSET      | 2,656 ops/sec | 1504.61 µs | 2661.12 µs |
+| HGET      | 1,490,723 ops/sec | 0.31 µs | 0.58 µs |
+| HMGET     | 602,076 ops/sec | 1.47 µs | 0.87 µs |
+| HGETALL   | 3,416,285 ops/sec | 0.14 µs | 0.17 µs |
+| HDEL      | 3,128 ops/sec | 1277.02 µs | 2725.08 µs |
+
 **Key Insights:**
-- **fsync impact:** Reduces write throughput by ~60% for strings, ~15% for lists
-- **Read performance:** GET and LRANGE are memory-only operations, unaffected by fsync
-- **List operations:** Slower than strings due to serialization overhead and larger WAL entries
+- **fsync impact:** Reduces write throughput by ~60% for strings, ~15% for lists, ~10% for hashes
+- **Read performance:** GET, LRANGE, HGET, HGETALL are memory-only operations, unaffected by fsync
+- **Hash operations:** HSET/HDEL are slower than list operations due to larger serialization overhead
+- **HMGET performance:** Efficient multi-field retrieval at ~600K ops/sec
+- **HGETALL performance:** Extremely fast at 3M+ ops/sec for small hashes (10K fields)
 - **Thread safety:** All operations are thread-safe with proper locking
 
 ## Installation
@@ -139,6 +163,15 @@ Default: `127.0.0.1:6379`
 - `RPOP key` - Remove and return last element
 - `LRANGE key start stop` - Get list slice (use -1 for end)
 - `LLEN key` - Get list length
+
+**Hash operations:**
+- `HSET key field value [field value ...]` - Set hash fields
+- `HGET key field` - Get hash field value
+- `HMGET key field [field ...]` - Get multiple hash field values
+- `HGETALL key` - Get all hash fields and values
+- `HDEL key field [field ...]` - Delete hash fields
+- `HLEN key` - Get number of fields in hash
+- `HEXISTS key field` - Check if hash field exists
 
 **Transactions:**
 - `MULTI` - Begin transaction block
@@ -187,6 +220,37 @@ TYPE mylist
 > list
 ```
 
+**Hash operations:**
+```bash
+HSET user:1 name Alice age 30 city NYC
+> (integer) 3
+
+HGET user:1 name
+> Alice
+
+HMGET user:1 name age email
+> 1) Alice
+> 2) 30
+> 3) (nil)
+
+HGETALL user:1
+> 1) name: Alice
+> 2) age: 30
+> 3) city: NYC
+
+HEXISTS user:1 name
+> (integer) 1
+
+HLEN user:1
+> (integer) 3
+
+HDEL user:1 age
+> (integer) 1
+
+TYPE user:1
+> hash
+```
+
 **Type safety:**
 ```bash
 SET mykey hello
@@ -194,6 +258,9 @@ SET mykey hello
 
 LPUSH mykey value
 > ERR WRONGTYPE: key is string, not list
+
+HSET mykey field value
+> ERR WRONGTYPE: key is string, not hash
 ```
 
 **Transactions:**
@@ -218,11 +285,11 @@ EXEC
 - [x] Thread-safe operations
 - [x] Transaction support (MULTI/EXEC/DISCARD)
 - [x] List data type (LPUSH, RPUSH, LPOP, RPOP, LRANGE, LLEN)
+- [x] Hash data type (HSET, HGET, HMGET, HGETALL, HDEL, HLEN, HEXISTS)
 - [x] Type system with WRONGTYPE errors
-- [x] Benchmarking suite
-- [ ] Hash data type (HSET, HGET, HGETALL, HDEL)
-- [ ] Set data type (SADD, SREM, SMEMBERS, SISMEMBER)
-- [ ] Numeric operations (INCR, DECR, INCRBY)
+- [x] Benchmarking suite (strings, lists, hashes)
+- [ ] Set data type (SADD, SREM, SMEMBERS, SISMEMBER, SCARD)
+- [ ] Numeric operations (INCR, DECR, INCRBY, INCRBYFLOAT)
 - [ ] RESP protocol implementation
 - [ ] TTL/expiration on keys
 - [ ] Snapshot-based persistence
