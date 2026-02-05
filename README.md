@@ -126,12 +126,34 @@ Benchmarks run on 40,000 operations with 4 threads (measured with `python -m pyk
 | HGETALL   | 3,416,285 ops/sec | 0.14 µs | 0.17 µs |
 | HDEL      | 3,128 ops/sec | 1277.02 µs | 2725.08 µs |
 
+### Set Operations
+
+#### Without fsync (buffered writes)
+
+| Operation | Throughput | Avg Latency | P95 Latency |
+|-----------|------------|-------------|-------------|
+| SADD      | 4,732 ops/sec | 844.00 µs | 2101.08 µs |
+| SISMEMBER | 1,809,180 ops/sec | 0.21 µs | 0.37 µs |
+| SMEMBERS  | 3,367,110 ops/sec | 0.14 µs | 0.17 µs |
+| SCARD     | 3,260,703 ops/sec | 0.15 µs | 0.17 µs |
+| SREM      | 5,437 ops/sec | 734.09 µs | 1954.21 µs |
+
+#### With fsync (durable writes)
+
+| Operation | Throughput | Avg Latency | P95 Latency |
+|-----------|------------|-------------|-------------|
+| SADD      | 4,283 ops/sec | 933.02 µs | 2082.54 µs |
+| SISMEMBER | 1,854,786 ops/sec | 0.20 µs | 0.33 µs |
+| SMEMBERS  | 3,392,910 ops/sec | 0.14 µs | 0.17 µs |
+| SCARD     | 3,260,310 ops/sec | 0.15 µs | 0.17 µs |
+| SREM      | 4,988 ops/sec | 799.83 µs | 1980.75 µs |
+
 **Key Insights:**
-- **fsync impact:** Reduces write throughput by ~60% for strings, ~15% for lists, ~10% for hashes
-- **Read performance:** GET, LRANGE, HGET, HGETALL are memory-only operations, unaffected by fsync
-- **Hash operations:** HSET/HDEL are slower than list operations due to larger serialization overhead
-- **HMGET performance:** Efficient multi-field retrieval at ~600K ops/sec
-- **HGETALL performance:** Extremely fast at 3M+ ops/sec for small hashes (10K fields)
+- **fsync impact:** Reduces write throughput by ~60% for strings, ~15% for lists, ~10% for hashes/sets
+- **Read performance:** GET, LRANGE, HGET, HGETALL, SISMEMBER, SMEMBERS, SCARD are memory-only operations, unaffected by fsync
+- **Set operations:** SADD/SREM performance similar to list operations (~4-5K ops/sec)
+- **SISMEMBER performance:** Extremely fast membership checks at ~1.8M ops/sec
+- **SMEMBERS/SCARD performance:** Ultra-fast at 3M+ ops/sec for sets with 10K members
 - **Thread safety:** All operations are thread-safe with proper locking
 
 ## Installation
@@ -172,6 +194,16 @@ Default: `127.0.0.1:6379`
 - `HDEL key field [field ...]` - Delete hash fields
 - `HLEN key` - Get number of fields in hash
 - `HEXISTS key field` - Check if hash field exists
+
+**Set operations:**
+- `SADD key member [member ...]` - Add members to set
+- `SREM key member [member ...]` - Remove members from set
+- `SISMEMBER key member` - Check if member exists in set
+- `SMISMEMBER key member [member ...]` - Check multiple members
+- `SMEMBERS key` - Get all members of set
+- `SCARD key` - Get number of members in set
+- `SPOP key` - Remove and return random member
+- `SRANDMEMBER key [count]` - Get random member(s)
 
 **Transactions:**
 - `MULTI` - Begin transaction block
@@ -251,6 +283,50 @@ TYPE user:1
 > hash
 ```
 
+**Set operations:**
+```bash
+SADD myset apple banana cherry
+> (integer) 3
+
+SISMEMBER myset apple
+> (bool) True
+
+SISMEMBER myset grape
+> (bool) False
+
+SMISMEMBER myset apple grape banana
+> 1) (bool) True
+> 2) (bool) False
+> 3) (bool) True
+
+SMEMBERS myset
+> 1) apple
+> 2) banana
+> 3) cherry
+
+SCARD myset
+> (integer) 3
+
+SRANDMEMBER myset
+> banana
+
+SRANDMEMBER myset 2
+> 1) apple
+> 2) cherry
+
+SPOP myset
+> cherry
+
+SREM myset banana
+> (integer) 1
+
+SMEMBERS myset
+> 1) apple
+
+TYPE myset
+> set
+```
+
 **Type safety:**
 ```bash
 SET mykey hello
@@ -261,6 +337,9 @@ LPUSH mykey value
 
 HSET mykey field value
 > ERR WRONGTYPE: key is string, not hash
+
+SADD mykey member
+> ERR WRONGTYPE: key is string, not set
 ```
 
 **Transactions:**
@@ -286,9 +365,9 @@ EXEC
 - [x] Transaction support (MULTI/EXEC/DISCARD)
 - [x] List data type (LPUSH, RPUSH, LPOP, RPOP, LRANGE, LLEN)
 - [x] Hash data type (HSET, HGET, HMGET, HGETALL, HDEL, HLEN, HEXISTS)
+- [x] Set data type (SADD, SREM, SISMEMBER, SMISMEMBER, SMEMBERS, SCARD, SPOP, SRANDMEMBER)
 - [x] Type system with WRONGTYPE errors
-- [x] Benchmarking suite (strings, lists, hashes)
-- [ ] Set data type (SADD, SREM, SMEMBERS, SISMEMBER, SCARD)
+- [x] Benchmarking suite (strings, lists, hashes, sets)
 - [ ] Numeric operations (INCR, DECR, INCRBY, INCRBYFLOAT)
 - [ ] RESP protocol implementation
 - [ ] TTL/expiration on keys

@@ -17,7 +17,7 @@ def random_key():
     return "".join(random.choices(string.ascii_lowercase, k=16))
 
 
-def setup_db(wal_path="benchmark.wal", use_fsync=True):
+def setup_db(wal_path="benchmark.wal", use_fsync=False):
     """Setup a fresh DB instance for benchmarking"""
     # Clean up old instances (this also removes from factory caches)
     dispose_pykey_db(wal_path)
@@ -127,6 +127,49 @@ def benchmark_hdel(db, hash_keys, latencies):
         latencies.append(time.perf_counter() - start)
 
 
+def benchmark_sadd(db, thread_id, latencies):
+    for i in range(OPS_PER_THREAD):
+        key = f"set-{thread_id}"
+        value = f"member{i}"
+        start = time.perf_counter()
+        db.sadd(key, value)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_sismember(db, set_keys, latencies):
+    for i in range(OPS_PER_THREAD):
+        key = random.choice(set_keys)
+        member = f"member{random.randint(0, OPS_PER_THREAD - 1)}"
+        start = time.perf_counter()
+        db.sismember(key, member)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_smembers(db, set_keys, latencies):
+    for _ in range(OPS_PER_THREAD):
+        key = random.choice(set_keys)
+        start = time.perf_counter()
+        db.smembers(key)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_scard(db, set_keys, latencies):
+    for _ in range(OPS_PER_THREAD):
+        key = random.choice(set_keys)
+        start = time.perf_counter()
+        db.scard(key)
+        latencies.append(time.perf_counter() - start)
+
+
+def benchmark_srem(db, set_keys, latencies):
+    for i in range(OPS_PER_THREAD):
+        key = random.choice(set_keys)
+        member = f"member{random.randint(0, OPS_PER_THREAD - 1)}"
+        start = time.perf_counter()
+        db.srem(key, member)
+        latencies.append(time.perf_counter() - start)
+
+
 # Runner
 def run_benchmark(name, target, *args):
     print(f"\n=== {name} ===")
@@ -233,6 +276,36 @@ if __name__ == "__main__":
         benchmark_hdel(db, hash_keys, latencies)
 
     run_benchmark("HDEL benchmark", hdel_wrapper, db)
+
+    # Set operations
+    print("\n" + "=" * 60)
+    print("Set Operations")
+    print("=" * 60)
+
+    db = setup_db()
+    run_benchmark("SADD benchmark", benchmark_sadd, db)
+
+    set_keys = [k for k in db._db.keys() if k.startswith("set-")]
+
+    def sismember_wrapper(db, thread_id, latencies):
+        benchmark_sismember(db, set_keys, latencies)
+
+    run_benchmark("SISMEMBER benchmark", sismember_wrapper, db)
+
+    def smembers_wrapper(db, thread_id, latencies):
+        benchmark_smembers(db, set_keys, latencies)
+
+    run_benchmark("SMEMBERS benchmark", smembers_wrapper, db)
+
+    def scard_wrapper(db, thread_id, latencies):
+        benchmark_scard(db, set_keys, latencies)
+
+    run_benchmark("SCARD benchmark", scard_wrapper, db)
+
+    def srem_wrapper(db, thread_id, latencies):
+        benchmark_srem(db, set_keys, latencies)
+
+    run_benchmark("SREM benchmark", srem_wrapper, db)
 
     print("\n" + "=" * 60)
     print("Benchmark Complete!")

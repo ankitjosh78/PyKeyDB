@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional
 import threading
+import random
 from logging import getLogger
 from pykeydb.db.writeAheadLog import WriteAheadLog
 from pykeydb.db.keyValueDBInterface import KeyValueDBInterface
@@ -50,8 +51,8 @@ class PyKeyDB(KeyValueDBInterface):
                             if key in self._db:
                                 del self._db[key]
 
-                        elif op in ["LPUSH", "RPUSH", "LPOP", "RPOP", "HSET", "HDEL"]:
-                            # List and hash operations store full state
+                        elif op in ["LPUSH", "RPUSH", "LPOP", "RPOP", "HSET", "HDEL", "SADD", "SREMOVE", "SPOP"]:
+                            # List, hash, and set operations store full state
                             value = record["value"]
                             if isinstance(value, dict) and "type" in value:
                                 self._db[key] = TypedValue.from_dict(value)
@@ -355,7 +356,6 @@ class PyKeyDB(KeyValueDBInterface):
             return del_count
 
     def hlen(self, key: str) -> int:
-        """HLEN key - get number of fields in hash"""
         with self._db_lock:
             typed_val = self._db.get(key)
 
@@ -371,7 +371,6 @@ class PyKeyDB(KeyValueDBInterface):
             return len(typed_val.value)
 
     def hexists(self, key: str, field: str) -> bool:
-        """HEXISTS key field - check if hash field exists"""
         with self._db_lock:
             typed_val = self._db.get(key)
 
@@ -384,6 +383,170 @@ class PyKeyDB(KeyValueDBInterface):
                 )
 
             return field in typed_val.value
+
+    def sadd(self, key: str, *values: str) -> int:
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            if typed_val is None:
+                typed_val = TypedValue(value=set(values), data_type=DataType.SET)
+                elements_added = len(values)
+            elif typed_val.data_type != DataType.SET:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not set"
+                )
+            else:
+                elements_added = sum(
+                    1 for value in values if value not in typed_val.value
+                )
+                for value in values:
+                    typed_val.value.add(value)  # Fixed: set.add() returns None
+
+            self.wal.log_operation("SADD", key, typed_val.to_dict())
+            self._db[key] = typed_val
+            return elements_added
+
+    def sismember(self, key, value) -> bool:
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            if typed_val is None:
+                return False
+            elif typed_val.data_type != DataType.SET:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not set"
+                )
+            else:
+                return value in typed_val.value
+
+    def smismember(self, key, *values):
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            if typed_val is None:
+                response = []
+                for value in values:
+                    response.append(False)
+                return response
+
+            elif typed_val.data_type != DataType.SET:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not set"
+                )
+            else:
+                response = []
+                for value in values:
+                    response.append(value in typed_val.value)
+                return response
+
+    def smembers(self, key: str):
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            if typed_val is None:
+                return set()
+            elif typed_val.data_type != DataType.SET:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not set"
+                )
+            else:
+                return typed_val.value
+
+    def scard(self, key: str) -> int:
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            if typed_val is None:
+                return 0
+            elif typed_val.data_type != DataType.SET:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not set"
+                )
+
+            return len(typed_val.value)
+
+    def srandmember(self, key: str, count: Optional[int] = None):
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            if typed_val is None:
+                if count is not None:
+                    return [None] * count
+                return None
+            elif typed_val.data_type != DataType.SET:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not set"
+                )
+
+            if not typed_val.value:
+                return None if count is None else []
+
+            if count is None:
+                return random.choice(list(typed_val.value))
+
+            count_abs = abs(count)
+            if count >= 0:
+                return random.sample(list(typed_val.value), min(count_abs, len(typed_val.value)))
+            else:
+                return random.choices(list(typed_val.value), k=count_abs)
+
+    def spop(self, key: str):
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            if typed_val is None:
+                return None
+
+            elif typed_val.data_type != DataType.SET:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not set"
+                )
+
+            if not typed_val.value:
+                return None
+
+            element = random.choice(list(typed_val.value))
+            typed_val.value.remove(element)
+
+            # Log final state
+            if not typed_val.value:
+                # Set is now empty, delete the key
+                self.wal.log_operation("DEL", key)
+                del self._db[key]
+            else:
+                # Log updated set state
+                self.wal.log_operation("SPOP", key, typed_val.to_dict())
+
+            return element
+
+    def srem(self, key: str, *values: str) -> int:
+        with self._db_lock:
+            typed_val = self._db.get(key)
+
+            if typed_val is None:
+                return 0
+            elif typed_val.data_type != DataType.SET:
+                raise TypeError(
+                    f"ERR: WRONGTYPE -> key is {typed_val.data_type.value}, not set"
+                )
+
+            del_count = 0
+            for value in values:
+                if value in typed_val.value:
+                    typed_val.value.remove(value)
+                    del_count += 1
+
+            # Log final state if any elements were deleted
+            if del_count > 0:
+                # If set is now empty, we can delete the key
+                if not typed_val.value:
+                    self.wal.log_operation("DEL", key)
+                    del self._db[key]
+                else:
+                    # Log updated set state
+                    self.wal.log_operation("SREMOVE", key, typed_val.to_dict())
+
+            return del_count
 
 
 _pykey_dbs: Dict[str, PyKeyDB] = {}

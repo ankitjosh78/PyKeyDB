@@ -100,6 +100,61 @@ def apply_command(db, cmd: list[str]) -> str:
             exists = db.hexists(key, hkey)
             return "(integer) 1" if exists else "(integer) 0"
 
+        # Set Operations
+        if op == "SADD" and len(cmd) >= 3:
+            key = cmd[1]
+            values = cmd[2:]
+            length = db.sadd(key, *values)  # Fixed: unpack values
+            return f"(integer) {length}"
+
+        if op == "SREM" and len(cmd) >= 3:
+            key = cmd[1]
+            values = cmd[2:]
+            length = db.srem(key, *values)  # Fixed: unpack values
+            return f"(integer) {length}"
+
+        if op == "SISMEMBER" and len(cmd) == 3:
+            key = cmd[1]
+            value = cmd[2]
+            is_member = db.sismember(key, value)
+            return "(bool) True" if is_member else "(bool) False"
+
+        if op == "SMISMEMBER" and len(cmd) >= 3:
+            key = cmd[1]
+            values = cmd[2:]
+            is_members = db.smismember(key, *values)  # Fixed: unpack values
+            return "\n".join(
+                f"{i}) (bool) {value}" for i, value in enumerate(is_members, 1)
+            )
+
+        if op == "SMEMBERS" and len(cmd) == 2:
+            key = cmd[1]
+            members = db.smembers(key)
+            if not members:
+                return "(empty set)"
+            return "\n".join(f"{i}) {v}" for i, v in enumerate(members, 1))  # Fixed: start from 1
+
+        if op == "SCARD" and len(cmd) == 2:
+            count = db.scard(cmd[1])
+            return f"(integer) {count}"
+
+        if op == "SRANDMEMBER" and len(cmd) >= 2:
+            key = cmd[1]
+            count = int(cmd[2]) if len(cmd) == 3 else None
+            result = db.srandmember(key, count)
+            if result is None:
+                return "(nil)"
+            if isinstance(result, list):
+                if not result:
+                    return "(empty list)"
+                return "\n".join(f"{i}) {v}" for i, v in enumerate(result, 1))
+            return str(result)
+
+        if op == "SPOP" and len(cmd) == 2:
+            key = cmd[1]
+            spop_element = db.spop(key)
+            return str(spop_element) if spop_element else "(nil)"
+
         # General operations
         if op == "DEL" and len(cmd) == 2:
             return "OK" if db.delete(cmd[1]) else "NULL"
